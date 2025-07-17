@@ -1,0 +1,159 @@
+```cpp
+#include <eXoCAN.h>
+
+#define LED_PIN PC13
+#define CAN_BAUDRATE 500000 // 500 kbps
+#define TX_ID 0x123 // Sample transmit ID
+#define RX_ID_FILTER 0x7FF // Filter to accept all IDs (modify as needed)
+
+// CAN instance
+eXoCAN can;
+
+// Variables for received message (accessed in interrupt)
+volatile bool msgReceived = false;
+volatile uint8_t rxBuf[8];
+volatile uint8_t rxLen;
+volatile int rxId;
+
+void setup() {
+  // Initialize LED pin
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, HIGH); // LED off (active low on STM32F103C8)
+  
+  // Initialize Serial for debugging (optional)
+  Serial.begin(115200);
+  while (!Serial) delay(10);
+  Serial.println("CAN Interrupt Example Started");
+  
+  // Initialize CAN (PA11 RX, PA12 TX, 500 kbps)
+  can.begin(STD_ID_LEN, CAN_BAUDRATE, PORTA); // Use PORTB for PB8/PB9 if remapped
+  can.filterMask16Init(0, RX_ID_FILTER, 0x7FF); // Accept all IDs (11-bit)
+  
+  // Enable CAN receive interrupt
+  can.attachInterrupt(canRxISR);
+}
+
+void loop() {
+  // Send a sample CAN message every 2 seconds
+  uint8_t txBuf[8] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+  can.transmit(TX_ID, txBuf, 8);
+  Serial.println("Sent CAN message ID 0x123");
+  
+  // Check for received messages (set by interrupt)
+  if (msgReceived) {
+    // Disable interrupts briefly to read shared variables
+    noInterrupts();
+    uint8_t len = rxLen;
+    uint8_t buf[8];
+    int id = rxId;
+    for (int i = 0; i < len; i++) buf[i] = rxBuf[i];
+    msgReceived = false;
+    interrupts();
+    
+    // Print received message
+    Serial.print("Received CAN ID: 0x");
+    Serial.print(id, HEX);
+    Serial.print(", Data: ");
+    for (int i = 0; i < len; i++) {
+      Serial.print(buf[i], HEX);
+      Serial.print(" ");
+    }
+    Serial.println();
+    
+    // Blink LED 3 times to indicate reception
+    for (int i = 0; i < 3; i++) {
+      digitalWrite(LED_PIN, LOW);  // LED on
+      delay(200);
+      digitalWrite(LED_PIN, HIGH); // LED off
+      delay(200);
+    }
+  }
+  
+  delay(2000); // Send every 2 seconds
+}
+
+// CAN receive interrupt service routine
+void canRxISR() {
+  // Read received message
+  if (can.receive(rxId, rxLen, rxBuf)) {
+    msgReceived = true; // Flag for loop() to process
+  }
+}
+```
+
+### Key Features
+1. **CAN Initialization**:
+   - Uses `eXoCAN` library to initialize CAN at 500 kbps on PA11 (RX) and PA12 (TX).
+   - Sets a filter to accept all 11-bit IDs (`RX_ID_FILTER = 0x7FF`). Modify the filter (e.g., `0x123`) to receive specific IDs.
+2. **Transmit**:
+   - Sends a sample CAN message (ID 0x123, data `[0x01, 0x02, ..., 0x08]`) every 2 seconds.
+3. **Receive Interrupt**:
+   - Attaches an interrupt handler (`canRxISR`) to process incoming CAN messages.
+   - Stores message ID, length, and data in volatile variables for safe access.
+   - Sets `msgReceived` flag to trigger processing in `loop()`.
+4. **LED Feedback**:
+   - Blinks PC13 three times when a CAN message is received.
+5. **Serial Output**:
+   - Prints sent and received message details to Serial at 115200 baud (optional; requires USB-to-serial adapter).
+
+### Setup Instructions
+1. **Install eXoCAN Library**:
+   - Download from:
+     ```
+     https://github.com/exothink/eXoCAN
+     ```
+   - Install via **Sketch > Include Library > Add .ZIP Library**.
+2. **Configure Arduino IDE**:
+   - Select **Tools > Board > STM32 Boards > Generic STM32F103C series**, **Variant: STM32F103C8**, **Upload method: STM32CubeProgrammer (Serial)** or **STLink**.
+   - If using PB8 (CAN_RX) and PB9 (CAN_TX), change `can.begin(STD_ID_LEN, CAN_BAUDRATE, PORTA)` to `PORTB`.
+3. **Connect Hardware**:
+   - CAN Transceiver (e.g., MCP2551):
+     - TXD → PA12 (or PB9).
+     - RXD → PA11 (or PB8).
+     - CAN_H/CAN_L → Another CAN device (e.g., second STM32F103 running similar code).
+   - Power the STM32F103 and transceiver (3.3V/5V).
+   - Add a 120-ohm resistor across CAN_H/CAN_L if not already present.
+4. **Compile and Upload**:
+   - Copy the code into Arduino IDE.
+   - Click **Verify** to compile.
+   - Connect STM32F103 via ST-Link or USB-to-serial (BOOT0 = 1 for serial, then back to 0).
+   - Click **Upload**.
+
+### Testing
+- **Setup**: Connect the STM32F103 to another CAN device (e.g., another STM32F103 running the same code or a CAN bus simulator).
+- **Behavior**:
+  - The board sends a CAN message (ID 0x123) every 2 seconds.
+  - When a CAN message is received, the LED on PC13 blinks three times (200 ms on/off).
+  - If Serial is connected (via USB-to-serial adapter), open the Serial Monitor at 115200 baud to see sent and received message details.
+- **Verification**:
+  - Use a second STM32F103 or a CAN analyzer to send messages (e.g., ID 0x123) and confirm reception.
+  - If no LED blinking occurs, check CAN connections, baud rate, and termination resistor.
+
+### Troubleshooting
+1. **Compilation Errors**:
+   - If `eXoCAN.h` is not found, ensure the library is installed.
+   - If CAN initialization fails, try `PORTB` for PB8/PB9 pins.
+   - Update STM32duino core to 2.7.1 or later via Boards Manager.
+2. **No CAN Messages Received**:
+   - Verify CAN_H/CAN_L connections and 120-ohm termination.
+   - Ensure the second CAN device is sending messages at 500 kbps.
+   - Test with a known CAN device or loopback mode (if supported by eXoCAN).
+3. **Verbose Output**:
+   - Enable in **File > Preferences > Show verbose output during: Compilation and Upload**.
+   - Share the full error log if issues occur.
+
+### Notes
+- **Pin Remapping**: If your STM32F103 uses PB8/PB9 for CAN (common on some Blue Pill boards), update `can.begin(STD_ID_LEN, CAN_BAUDRATE, PORTB)`.
+- **Filter Customization**: Modify `RX_ID_FILTER` to accept specific CAN IDs (e.g., `0x123`) instead of all IDs (`0x7FF`).
+- **Roger Clark Core**: If you’re using the Roger Clark STM32 core, the eXoCAN library may not be fully compatible. I can provide an alternative using the `CAN` library from that core if needed.
+
+### Request for Details
+Please provide:
+- Arduino IDE version (e.g., 1.8.19 or 2.3.2).
+- STM32duino core version (check in Boards Manager).
+- CAN transceiver model (e.g., MCP2551).
+- CAN pins used (PA11/PA12 or PB8/PB9).
+- Programmer type (e.g., ST-Link, USB-to-serial).
+- Full error log if the code fails.
+
+Try this code with the STM32duino core and eXoCAN library. If you encounter issues or prefer a solution using the Roger Clark core, let me know, and I’ll provide an alternative. Share your progress or any errors!
